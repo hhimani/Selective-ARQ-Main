@@ -3,89 +3,59 @@ import struct
 import random
 import sys
 
-COMMAND_LINE_INPUT  = True
-
-def Verify_Check_sum(data,check_sum):
-    sum_element = 0
+def validate_checksum(data,check_sum):
+    s = 0
     for i in range(0, len(data), 2):
         if i + 1 < len(data):
-            element_16bits = ord(data[i]) + (ord(data[i + 1]) << 8)
-            k = sum_element + element_16bits
-            a = (k & 0xffff)
-            b = k >> 16
-            sum_element = a + b  # carry around addition
-    Recieved_data_check_sum = sum_element & 0xffff
-    check_sum_verified = Recieved_data_check_sum & check_sum
-    return check_sum_verified
+            w = ord(data[i]) + (ord(data[i + 1]) << 8)
+            k = s + w
+            s = (k & 0xffff) + (k >> 16)
+    cal_check_sum = s & 0xffff
+    return cal_check_sum & check_sum
 
-def Make_Ack_Header(seq_num):
-    ackPacket = struct.pack('!IHH', seq_num, 0, 43690)  # SEQUENCE NUMBER BEING ACKED
-    
-    return ackPacket
-
-
-def Decode_packet(packet_data):
-    Header = struct.unpack('!IHH', packet_data[0:8])
-    seq_num = Header[0]
-    check_sum = Header[1]
+def get_attr(packet_data):
     data = packet_data[8:]
-    valid_frame = False
-    check_sum_verified = Verify_Check_sum(data,check_sum)
-    #print data
-
-    if check_sum_verified == 0 and Header[2] == 21845:
-        valid_frame = True
-
-    return valid_frame, seq_num, data
-
+    header = struct.unpack('!IHH', packet_data[0:8])
+    seq_num = header[0]
+    check_sum = header[1]
+    is_valid = False
+    check_sum_verified = validate_checksum(data,check_sum)
+    if check_sum_verified == 0 and header[2] == 21845:
+        is_valid = True
+    return is_valid, seq_num, data
 
 def main():
-
-
-    if COMMAND_LINE_INPUT:
+    port = 7735
+    file_name = 'RFC123.txt'
+    prob = 0.05
+    if len(sys.argv) > 1:
         port = int(sys.argv[1])
         file_name = sys.argv[2]
         prob = float(sys.argv[3])
-    else :
-        port = 7735
- 
-        prob = 0.05
-
-    Server_Soc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    ip = socket.gethostbyname(socket.gethostname())
-    print 'IP address of the server is ' +ip + ' it is running at port' + str(port)
-
-    Server_Soc.bind(('', port))
-    prev_sequence_number = -1
-
-    file_writer = open(file_name, 'wb')
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_socket.bind(('', port))
+    prev_seq_num = -1
+    f = open(file_name, 'wb')
     flag = True
     while flag:
-        packet_data, Client_Address = Server_Soc.recvfrom(2048)
-        valid_frame, sequence_number, data = Decode_packet(packet_data)
-
-        if valid_frame:
-            if random.uniform(0, 1) > prob:  # packet accepted
-                if sequence_number == prev_sequence_number + 1:
-                    Ack_packet = Make_Ack_Header(sequence_number)
-                    Server_Soc.sendto(Ack_packet, Client_Address)
-                    if data == 'endofframe':
+        packet_data, addr = server_socket.recvfrom(2048)
+        is_valid, seq_num, data = get_attr(packet_data)
+        if is_valid:
+            if random.uniform(0, 1) > prob:
+                if seq_num == prev_seq_num + 1:
+                    ack = struct.pack('!IHH', seq_num, 0, 43690)
+                    server_socket.sendto(ack, addr)
+                    if data == '!E!O!F!':
                         flag = False
-                        print 'End of file command in data format received in Seq No' + str(sequence_number)
+                        print 'File ended at seq No' + str(seq_num)
                         break
-                    file_writer.write(data)
-                    prev_sequence_number = sequence_number
-                    #print prev_sequence_number
-                else:
-                    #print 'Out of order packet lost, Sequence Number = ' + str(sequence_number)
-                    pass
+                    f.write(data)
+                    prev_seq_num = seq_num
             else:
-                print 'Packet Loss, Sequence Number =' + str(sequence_number)
-
-    print 'Complete file received - Closing connection'
-    file_writer.close()
-    Server_Soc.close()
-
+                print 'Packet Lost at sequence Number =' + str(seq_num)
+    print 'File transfer successful'
+    f.close()
+    server_socket.close()
 
 if __name__ == '__main__':
     main()
