@@ -126,7 +126,7 @@ def main():
     server_port = 7736
     filename = 'RFC123.txt'
     MSS = 500
-    if len(sys.args) > 1:
+    if len(sys.argv) > 1:
         server_hostname = sys.argv[1]
         server_port = int(sys.argv[2])
         filename = sys.argv[3]
