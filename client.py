@@ -5,10 +5,10 @@ import struct
 import threading
 import os
 
-N = 1
-N_Transit_Window = {}
+N = 64
+timestamps = {}
 lock = threading.Lock()
-Packet_Transferring = True
+status = True
 packets_to_send = []
 
 def validate_checksum(data):
@@ -49,47 +49,37 @@ def create_packets(filename,MSS):
 def rdt_send(addr, client_socket, N):
     packets_sent = 0
     while packets_sent < len(packets_to_send):
-        if len(N_Transit_Window) < N:
-            Packet_Sender(addr, client_socket, packets_sent, packets_to_send[packets_sent])
+        if len(timestamps) < N:
+            send_packets(addr, client_socket, packets_sent, packets_to_send[packets_sent])
             packets_sent += 1
 
-class Packet_Sender(threading.Thread):
-    def __init__(self, addr, client_socket, seq_num, data):
-        threading.Thread.__init__(self)
-        self.addr = addr
-        self.client_socket = client_socket
-        self.seq_num = seq_num
-        self.data = data
-        self.start()
-
-    def run(self):
-        global N_Transit_Window, Packet_Transferring
-        packet = self.data
-        lock.acquire()
-        N_Transit_Window[self.seq_num] = time.time()
-        try:
-            self.client_socket.sendto(packet, self.addr)
-            if self.seq_num == len(packets_to_send) -1:
-                Packet_Transferring = False
-        except:
-            print "Server closed its connection"
-            self.client_socket.close()
-            exit()
-        lock.release()
-        try:
-            while self.seq_num in N_Transit_Window:
-                lock.acquire()
-                if self.seq_num in N_Transit_Window:
-                    # RTO taken as 0.1
-                    if (time.time() - N_Transit_Window[self.seq_num]) > 0.1:
-                        print 'Time out, Sequence Number =' + str(self.seq_num)
-                        N_Transit_Window[self.seq_num] = time.time()
-                        self.client_socket.sendto(packet, self.addr)
-                lock.release()
-        except:
-            print "Server closed its connection"
-            self.client_socket.close()
-            exit()
+def send_packets(addr, client_socket, seq_num, data):
+    global timestamps, status
+    lock.acquire()
+    timestamps[seq_num] = time.time()
+    try:
+        client_socket.sendto(data, addr)
+        if seq_num == len(packets_to_send) -1:
+            status = False
+    except Exception, e:
+        print ("Server closed its connection")
+        client_socket.close()
+        exit()
+    lock.release()
+    try:
+        while seq_num in timestamps:
+            lock.acquire()
+            if seq_num in timestamps:
+                # RTO taken as 0.1
+                if (time.time() - timestamps[seq_num]) > 0.1:
+                    print 'Time out, Sequence Number = ' + str(seq_num)
+                    timestamps[seq_num] = time.time()
+                    client_socket.sendto(data, addr)
+            lock.release()
+    except Exception, e:
+        print ("Server closed its connection-- " + str(e))
+        client_socket.close()
+        exit()
 
 def get_ack_attr(ack_packet):
     ack = struct.unpack('!IHH', ack_packet)
@@ -98,20 +88,20 @@ def get_ack_attr(ack_packet):
     if ack[1] == 0 and ack[2] == 43690:
         is_valid = True
     else:
-        print 'Invalid Frame as Header Format dosent match'
+        print 'Invalid Frame as Header Format doesnt match'
     return is_valid, seq_num
 
 def get_ack(client_socket):
-    global N_Transit_Window
+    global timestamps
     try:
-        while Packet_Transferring or len(N_Transit_Window) > 0 :
-            if len(N_Transit_Window) > 0:
+        while status or len(timestamps) > 0 :
+            if len(timestamps) > 0:
                 ack, addr = client_socket.recvfrom(2048)
                 is_valid, seq_num = get_ack_attr(ack)
                 if is_valid:
-                    if seq_num in N_Transit_Window:
+                    if seq_num in timestamps:
                         lock.acquire()
-                        del (N_Transit_Window[seq_num])
+                        del (timestamps[seq_num])
                         if seq_num+1 == len(packets_to_send):
                             print 'Last acknowledgement recieved'
                         lock.release()
@@ -122,8 +112,8 @@ def get_ack(client_socket):
 
 def main():
     global N
-    server_hostname = '192.168.72.81'
-    server_port = 7736
+    server_hostname = 'localhost'
+    server_port = 7735
     filename = 'RFC123.txt'
     MSS = 500
     if len(sys.argv) > 1:
@@ -134,10 +124,10 @@ def main():
         MSS = int(sys.argv[5])
     create_packets(filename,MSS)
     addr = (server_hostname, server_port)
-    client_ip = socket.gethostbyname(socket.gethostname())
+    client_ip = ''
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    client_Port = 9292
-    client_socket.bind((client_ip, client_Port))
+    client_port = 9292
+    client_socket.bind((client_ip, client_port))
     start = time.time()
     get_ack_thread = threading.Thread(target=get_ack, args=(client_socket,))
     rdt_send_thread = threading.Thread(target=rdt_send,args=(addr, client_socket, N))
